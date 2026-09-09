@@ -1,0 +1,7 @@
+Dualis splits a song into vocals and instrumental stems on your phone.
+
+Paste a Spotify, YouTube Music, or YouTube link, or open a local audio file. Download and ONNX separation stay on-device. Play both stems in sync, then switch Normal / Vocal / Inst.
+
+No Dualis cloud, no Google Play Services, no account.
+
+The first job downloads Kim Vocal 2 (about 60–80 MB). A 3–4 minute song on a mid-range phone can take 8–20 minutes on CPU. Flagship NNAPI devices may finish in 2–6 minutes.

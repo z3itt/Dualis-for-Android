@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Dualis</string>
+    <string name="wordmark">DUΛLIS</string>
+    <string name="tagline">Local vocal separation</string>
+    <string name="paste_hint">Paste Spotify, YouTube Music, or playlist links</string>
+    <string name="separate">Separate</string>
+    <string name="files">Files</string>
+    <string name="queue">Queue</string>
+    <string name="library">Library</string>
+    <string name="active_jobs">Active jobs</string>
+    <string name="your_library">Your library</string>
+    <string name="nothing_playing">Nothing playing</string>
+    <string name="load_ready_hint">Load a ready stem to begin</string>
+    <string name="developed_by">developed by z3itt</string>
+    <string name="job_notification_title">Dualis is working</string>
+    <string name="playback_notification_title">Dualis</string>
+    <string name="channel_jobs">Separation jobs</string>
+    <string name="channel_playback">Playback</string>
+    <string name="first_run_model">The first stem job downloads Kim Vocal 2 (about 60–80 MB) onto this device.</string>
+</resources>

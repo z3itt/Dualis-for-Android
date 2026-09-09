@@ -1,0 +1,39 @@
+name: Dualis
+Categories:
+  - Multimedia
+License: GPL-3.0-or-later
+AuthorName: z3itt
+AuthorEmail: info@z3itt.com
+AuthorWebSite: https://z3itt.com
+WebSite: https://github.com/z3itt/Dualis
+SourceCode: https://github.com/z3itt/Dualis-Android
+IssueTracker: https://github.com/z3itt/Dualis-Android/issues
+
+Summary: On-device vocal and instrumental stem separation
+Description: |-
+    Dualis splits a song into vocals and instrumental stems on your phone.
+    Paste a Spotify, YouTube Music, or YouTube link, or open a local audio file.
+    Separation uses ONNX (Kim Vocal 2 by default) with NNAPI when available
+    and CPU fallback. Nothing is uploaded to a Dualis server.
+
+    This is the Android sibling of desktop Dualis (com.z3itt.dualis).
+    Distribution is GitHub Releases and F-Droid only. There is no Play Store
+    build and no Google Play Services requirement.
+
+    First run downloads the selected ONNX model (about 60–80 MB).
+
+RepoType: git
+Repo: https://github.com/z3itt/Dualis-Android.git
+
+Builds:
+  - versionName: 1.0.0
+    versionCode: 1
+    commit: v1.0.0
+    subdir: app
+    gradle:
+      - yes
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 1.0.0
+CurrentVersionCode: 1

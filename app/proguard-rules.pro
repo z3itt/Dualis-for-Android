@@ -1,0 +1,5 @@
+-keep class ai.onnxruntime.** { *; }
+-keep class org.jtransforms.** { *; }
+-keep class org.schabi.newpipe.extractor.** { *; }
+-dontwarn org.slf4j.**
+-dontwarn javax.annotation.**

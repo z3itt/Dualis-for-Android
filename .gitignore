@@ -1,0 +1,24 @@
+*.iml
+.gradle/
+local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+.cxx/
+*.log
+.kotlin/
+keystore.properties
+*.jks
+*.keystore
+.externalNativeBuild
+/app/release/
+# downloaded ONNX models if ever vendored locally
+*.onnx
+.vscode/
