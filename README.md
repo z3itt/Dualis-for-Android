@@ -16,17 +16,18 @@ It is not a WebView or Tauri wrap of the desktop UI.
 | **Version** | `1.0.0` |
 | **Min SDK** | 26 (Android 8.0) |
 | **Target SDK** | 35 |
-| **Distribution** | GitHub Releases + F-Droid. No Google Play Store. |
-| **Desktop sibling** | Dualis (`com.z3itt.dualis` on Linux/Windows) |
+| **Distribution** | GitHub Releases, F-Droid |
+| **Desktop sibling** | Dualis for Linux and Windows |
 | **License** | [GPL-3.0-or-later](LICENSE) |
 
 Dualis is free software. You may study, modify, and redistribute it under the
 terms of the GNU General Public License v3. See [LICENSE](LICENSE),
 [COPYING](COPYING), [NOTICE](NOTICE), and [ATTRIBUTION.md](ATTRIBUTION.md).
 
-The same applicationId is used on purpose: desktop and Android are different
-package ecosystems (native installers vs APK). F-Droid and sideload builds
-do not collide with the Tauri identifier.
+There is no Play Store build and no Google Play Services requirement. The same
+applicationId is used on purpose: desktop and Android are different package
+ecosystems (native installers vs APK), so F-Droid and sideload builds do not
+collide with the Tauri identifier.
 
 Separation runs on the device. Audio is not uploaded to a Dualis server.
 
@@ -107,15 +108,20 @@ and two ExoPlayer instances stay in sync.
 
 | Area | Approach |
 |------|----------|
-| UI | Kotlin, Jetpack Compose, Material 3 recolored to Dualis tokens |
+| UI | Compose + Material 3, Dualis tokens |
 | State | `StateFlow` / `SharedFlow` in `DualisViewModel` |
-| Jobs | Single-thread `WorkQueue` + `JobForegroundService` (one download/separation at a time) |
-| Spotify | oEmbed + page scrape, then YouTube search `ytsearch1:{title} {artist}` |
-| Retry | Always uses stored `ytdlpQuery`, never the Spotify URL |
-| Separation | ONNX MDX / Roformer on device (Kim Vocal 2 default) |
-| Execution | NNAPI when it works, then CPU. Accelerator errors retry on CPU |
-| Playback | Two ExoPlayer instances, Media3 session, audio focus |
-| Persistence | Room / SQLite (`tracks`, `playlists`, `settings`) |
+| Jobs | `WorkQueue` + `JobForegroundService` |
+| Spotify | oEmbed + scrape, then a YouTube search |
+| Retry | Stored `ytdlpQuery`, never the Spotify URL |
+| Separation | ONNX MDX / Roformer on device |
+| Execution | NNAPI when available, CPU fallback |
+| Playback | Two ExoPlayer instances, Media3 session |
+| Persistence | Room / SQLite |
+
+The work queue is single-threaded, so one download or separation runs at a
+time. Spotify tracks are searched on YouTube as `ytsearch1:{title} {artist}`,
+and a retry reuses that stored query instead of the Spotify URL. Room holds
+`tracks`, `playlists`, and `settings`.
 
 ## Tech stack
 
@@ -125,27 +131,28 @@ and two ExoPlayer instances stay in sync.
 | UI | Jetpack Compose, Material 3 |
 | Database | Room 2.6 |
 | Async | Kotlin Coroutines, Flow |
-| Playback | Media3 ExoPlayer + MediaSession 1.5 |
+| Playback | Media3 ExoPlayer + Session 1.5 |
 | Inference | ONNX Runtime Android 1.22 |
-| Download | NewPipe Extractor 0.26, OkHttp, Jsoup |
+| Download | NewPipe Extractor, OkHttp, Jsoup |
 | DSP | JTransforms 3.1 |
-| Build | AGP 8.7, Gradle 8.11.1, KSP, JDK 17 |
+| Build | AGP 8.7, Gradle 8.11.1, JDK 17 |
 
 ## Privacy and permissions
 
 Dualis talks to Spotify oEmbed, YouTube (via NewPipe Extractor), and model
 download hosts only when you paste a link or fetch a model. Stems stay under
-app storage (`com.z3itt.dualis`). There is no Dualis cloud account and no
-Google Play Services.
+app storage (`com.z3itt.dualis`). There is no Dualis cloud account.
 
 | Permission | Why |
 |------------|-----|
-| `INTERNET` / `ACCESS_NETWORK_STATE` | Link ingest, Spotify metadata, model download |
-| `FOREGROUND_SERVICE` / `DATA_SYNC` | Job progress while a download or separation is running |
-| `FOREGROUND_SERVICE_MEDIA_PLAYBACK` | Keep audio alive after lock; system mini player |
-| `POST_NOTIFICATIONS` | Job progress and media controls |
-| `WAKE_LOCK` | Playback and jobs while the screen is off |
-| `WRITE_EXTERNAL_STORAGE` (API 28 and below) | Legacy local-file fallback |
+| `INTERNET` | Link ingest, model download |
+| `ACCESS_NETWORK_STATE` | Connectivity checks |
+| `FOREGROUND_SERVICE` | Job and playback services |
+| `FOREGROUND_SERVICE_DATA_SYNC` | Job progress |
+| `FOREGROUND_SERVICE_MEDIA_PLAYBACK` | Audio after lock |
+| `POST_NOTIFICATIONS` | Progress, media controls |
+| `WAKE_LOCK` | Playback with screen off |
+| `WRITE_EXTERNAL_STORAGE` | Legacy export, API 28 and below |
 
 Share intents: `audio/*` files and `text/plain` URLs.
 
@@ -210,22 +217,24 @@ into app files. Keep the screen on or let the foreground notification run.
 These numbers match desktop Dualis, on phone hardware:
 
 | Device class | 3-4 min song |
-|--------------|----------------|
-| Mid-range, CPU only | about 8-20 minutes |
-| Flagship with NNAPI | about 2-6 minutes possible |
-| Long songs + BS-Roformer | may OOM on low-RAM phones |
+|--------------|--------------|
+| Mid-range, CPU only | 8-20 minutes |
+| Flagship with NNAPI | 2-6 minutes |
+| Long songs, BS-Roformer | may run out of RAM |
 
 If QNN or NNAPI fail, Dualis retries on CPU and shows
 "GPU memory exhausted, retrying on CPU" or "Accelerator failed, retrying on CPU".
 
 ## Download backends
 
-`DownloadBackend` is an interface:
+`DownloadBackend` has two implementations:
 
-| Backend | Role |
-|---------|------|
-| `LocalFileBackend` | SAF picker + share intent `audio/*` |
-| `LinkBackend` | YouTube via [NewPipe Extractor](https://github.com/TeamNewPipe/NewPipeExtractor) (FOSS Java). Spotify metadata via oEmbed/scrape, then YouTube search using the stored `ytsearch1:` query. |
+- **`LocalFileBackend`** takes files from the SAF picker and from `audio/*`
+  share intents.
+- **`LinkBackend`** pulls YouTube audio through
+  [NewPipe Extractor](https://github.com/TeamNewPipe/NewPipeExtractor), a FOSS
+  Java library. Spotify links resolve through oEmbed or a page scrape first,
+  then a YouTube search using the stored `ytsearch1:` query.
 
 Android does not spawn a desktop `yt-dlp` sidecar. Bundling a Python/yt-dlp
 binary would fight SELinux, ABI splits, and F-Droid reproducible builds.
@@ -250,7 +259,7 @@ Models are downloaded at runtime, not redistributed in the APK.
 - ExoPlayer / Media3 is Apache 2.0
 - NewPipe Extractor is GPL-3.0-compatible
 - Skeleton metadata: `metadata/com.z3itt.dualis.yml`
-- AntiFeatures to consider: `NonFreeNet` (YouTube/Spotify/model hosts when the user pastes a link or the app fetches a model)
+- AntiFeature to consider: `NonFreeNet`, for YouTube, Spotify, and model hosts
 
 ## Project layout
 
