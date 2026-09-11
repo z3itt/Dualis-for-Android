@@ -30,10 +30,24 @@ object LibraryRules {
     }
 
     fun standaloneTracks(tracks: List<Track>): List<Track> =
-        tracks.filter { it.playlistId.isNullOrBlank() }
+        tracks.filter { it.playlistId.isNullOrBlank() && listedInLibrary(it.status) }
 
     fun tracksInPlaylist(tracks: List<Track>, playlistId: String): List<Track> =
-        tracks.filter { it.playlistId == playlistId }.sortedBy { it.playlistIndex ?: 0L }
+        tracks.filter { it.playlistId == playlistId && listedInLibrary(it.status) }
+            .sortedBy { it.playlistIndex ?: 0L }
+
+    fun listedInLibrary(status: TrackStatus) = status != TrackStatus.ERROR
+
+    fun failedJobTracks(
+        tracks: List<Track>,
+        failedTracks: Map<String, Track>,
+        hiddenIds: Set<String>,
+        limit: Int = 8,
+    ): List<Track> {
+        val merged = (tracks.filter { it.status == TrackStatus.ERROR } + failedTracks.values)
+            .distinctBy { it.id }
+        return merged.filter { it.id !in hiddenIds }.take(limit)
+    }
 
     fun parseEtaSeconds(event: JobEvent): Float? {
         if (event.etaSeconds != null && event.etaSeconds.isFinite()) return event.etaSeconds
@@ -60,4 +74,30 @@ object LibraryRules {
         status == TrackStatus.DOWNLOADING ||
             status == TrackStatus.DOWNLOADED ||
             status == TrackStatus.SEPARATING
+
+    /** Waiting jobs in WorkQueue order, then any QUEUED row not published yet. */
+    fun waitingTracks(tracks: List<Track>, pendingIds: List<String>): List<Track> {
+        val byId = tracks.associateBy { it.id }
+        val seen = mutableSetOf<String>()
+        val ordered = mutableListOf<Track>()
+        for (id in pendingIds) {
+            val track = byId[id] ?: continue
+            if (isLive(track.status) || track.status == TrackStatus.READY || track.status == TrackStatus.ERROR) continue
+            if (seen.add(track.id)) ordered.add(track)
+        }
+        for (track in tracks) {
+            if (track.status == TrackStatus.QUEUED && seen.add(track.id)) ordered.add(track)
+        }
+        return ordered
+    }
+
+    fun jobBadgeCount(liveCount: Int, waitingCount: Int): Int = liveCount + waitingCount
+
+    fun stemFileName(title: String, stem: String): String {
+        val clean = title.trim().replace(Regex("""[\\/:*?"<>|]"""), "_")
+            .replace(Regex("\\s+"), " ")
+            .ifBlank { "Dualis" }
+            .take(80)
+        return "$clean - $stem.wav"
+    }
 }

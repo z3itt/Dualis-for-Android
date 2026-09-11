@@ -1,9 +1,11 @@
 package com.z3itt.dualis.audio
 
 import android.content.Context
+import android.net.Uri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.z3itt.dualis.domain.model.LoopMode
@@ -19,8 +21,13 @@ class DualStemPlayer(context: Context) {
         .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
         .build()
 
-    val vocals: ExoPlayer = ExoPlayer.Builder(context).setAudioAttributes(attrs, true).build()
-    val instrumental: ExoPlayer = ExoPlayer.Builder(context).setAudioAttributes(attrs, false).build()
+    val vocals: ExoPlayer = ExoPlayer.Builder(context).setAudioAttributes(attrs, true).build().also {
+        it.setWakeMode(C.WAKE_MODE_LOCAL)
+        it.setHandleAudioBecomingNoisy(true)
+    }
+    val instrumental: ExoPlayer = ExoPlayer.Builder(context).setAudioAttributes(attrs, false).build().also {
+        it.setWakeMode(C.WAKE_MODE_LOCAL)
+    }
 
     private val _playing = MutableStateFlow(false)
     val playing: StateFlow<Boolean> = _playing
@@ -33,11 +40,15 @@ class DualStemPlayer(context: Context) {
     var loopMode: LoopMode = LoopMode.OFF
         private set
     var onEnded: (() -> Unit)? = null
+    private var ignoreEnded = false
 
     init {
         vocals.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED && loopMode != LoopMode.SONG) {
+                if (playbackState == Player.STATE_READY) {
+                    refreshDuration()
+                }
+                if (playbackState == Player.STATE_ENDED && loopMode != LoopMode.SONG && !ignoreEnded) {
                     _playing.value = false
                     onEnded?.invoke()
                 }
@@ -53,19 +64,37 @@ class DualStemPlayer(context: Context) {
                 newPosition: Player.PositionInfo,
                 reason: Int,
             ) {
-                instrumental.seekTo(vocals.currentPosition)
+                if (abs(instrumental.currentPosition - vocals.currentPosition) > 40) {
+                    instrumental.seekTo(vocals.currentPosition)
+                }
+            }
+        })
+        instrumental.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) refreshDuration()
             }
         })
     }
 
-    fun load(vocalsFile: File, instFile: File) {
-        stop()
-        vocals.setMediaItem(MediaItem.fromUri(vocalsFile.absolutePath))
-        instrumental.setMediaItem(MediaItem.fromUri(instFile.absolutePath))
+    fun load(
+        vocalsFile: File,
+        instFile: File,
+        title: String = vocalsFile.nameWithoutExtension,
+        artist: String = "Dualis",
+        coverPath: String? = null,
+        mediaId: String = vocalsFile.absolutePath,
+        knownDurationMs: Long? = null,
+    ) {
+        ignoreEnded = true
+        if (knownDurationMs != null && knownDurationMs > 0) durationMs = knownDurationMs
+        val meta = metadata(title, artist, coverPath, durationMs.takeIf { it > 0 })
+        vocals.setMediaItem(mediaItem(vocalsFile, mediaId, meta), true)
+        instrumental.setMediaItem(mediaItem(instFile, "$mediaId:inst", meta), true)
         vocals.prepare()
         instrumental.prepare()
         applyVolumes()
-        durationMs = maxOf(vocals.duration.coerceAtLeast(0), instrumental.duration.coerceAtLeast(0))
+        refreshDuration()
+        ignoreEnded = false
     }
 
     fun play() {
@@ -87,9 +116,22 @@ class DualStemPlayer(context: Context) {
     }
 
     fun stop() {
-        vocals.stop()
-        instrumental.stop()
+        ignoreEnded = true
+        vocals.pause()
+        instrumental.pause()
+        vocals.seekTo(0)
+        instrumental.seekTo(0)
         _playing.value = false
+        ignoreEnded = false
+    }
+
+    fun clear() {
+        stop()
+        ignoreEnded = true
+        vocals.clearMediaItems()
+        instrumental.clearMediaItems()
+        durationMs = 0
+        ignoreEnded = false
     }
 
     fun seek(ms: Long) {
@@ -98,6 +140,10 @@ class DualStemPlayer(context: Context) {
     }
 
     fun currentPosition(): Long = vocals.currentPosition.coerceAtLeast(0)
+
+    fun currentMediaId(): String? = vocals.currentMediaItem?.mediaId?.takeIf { it.isNotBlank() }
+
+    fun hasMedia(): Boolean = vocals.mediaItemCount > 0 && currentMediaId() != null
 
     fun setStemMode(mode: StemMode) {
         this.mode = mode
@@ -139,14 +185,58 @@ class DualStemPlayer(context: Context) {
         }
     }
 
+    private fun refreshDuration() {
+        val left = vocals.duration
+        val right = instrumental.duration
+        durationMs = when {
+            left > 0 && right > 0 -> minOf(left, right)
+            left > 0 -> left
+            right > 0 -> right
+            else -> 0
+        }
+    }
+
     private fun syncIfNeeded() {
         val drift = abs(vocals.currentPosition - instrumental.currentPosition)
         if (drift > 40) {
             instrumental.seekTo(vocals.currentPosition)
         }
-        durationMs = minOf(
-            vocals.duration.takeIf { it > 0 } ?: Long.MAX_VALUE,
-            instrumental.duration.takeIf { it > 0 } ?: Long.MAX_VALUE,
-        ).takeIf { it != Long.MAX_VALUE } ?: maxOf(vocals.duration, instrumental.duration).coerceAtLeast(0)
+        refreshDuration()
+    }
+
+    private fun mediaItem(file: File, id: String, metadata: MediaMetadata): MediaItem =
+        MediaItem.Builder()
+            .setMediaId(id)
+            .setUri(Uri.fromFile(file))
+            .setMediaMetadata(metadata)
+            .build()
+
+    private fun metadata(
+        title: String,
+        artist: String,
+        coverPath: String?,
+        durationMs: Long?,
+    ): MediaMetadata {
+        val builder = MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(artist)
+            .setSubtitle(artist)
+            .setAlbumTitle("Dualis")
+            .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+            .setIsPlayable(true)
+        if (durationMs != null && durationMs > 0) {
+            builder.setDurationMs(durationMs)
+        }
+        val cover = coverPath?.let { File(it) }?.takeIf { it.isFile && it.length() > 64L }
+        if (cover != null) {
+            builder.setArtworkUri(Uri.fromFile(cover))
+            runCatching {
+                val bytes = cover.readBytes()
+                if (bytes.size in 64..1_500_000) {
+                    builder.setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                }
+            }
+        }
+        return builder.build()
     }
 }

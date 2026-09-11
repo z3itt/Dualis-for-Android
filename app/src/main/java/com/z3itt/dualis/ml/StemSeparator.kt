@@ -4,9 +4,13 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
+import android.system.Os
+import android.util.Log
 import com.z3itt.dualis.audio.DecodedAudio
 import com.z3itt.dualis.audio.WavIo
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 data class LoadedModel(
@@ -28,36 +32,89 @@ data class SeparationResult(
     val executionProvider: String,
 )
 
-class StemSeparator {
-    fun loadModel(modelFile: File, spec: ModelSpec, preferNnapi: Boolean): LoadedModel {
+class StemSeparator(
+    private val nativeLibDir: String? = null,
+    private val qnnCacheDir: File? = null,
+) {
+    fun loadModel(modelFile: File, spec: ModelSpec, preferAccel: Boolean): LoadedModel {
         val env = OrtEnvironment.getEnvironment()
-        if (preferNnapi) {
+        if (preferAccel) {
+            if (InferAccel.shouldTryQnn(nativeLibDir)) {
+                try {
+                    return tryLoad(env, modelFile, spec, InferBackend.QNN)
+                } catch (err: Throwable) {
+                    Log.w(TAG, "QNN load failed, trying NNAPI", err)
+                }
+            }
             try {
-                return tryLoad(env, modelFile, spec, nnapi = true)
-            } catch (err: Exception) {
-                // fall through to CPU
+                return tryLoad(env, modelFile, spec, InferBackend.NNAPI)
+            } catch (err: Throwable) {
+                Log.w(TAG, "NNAPI load failed, using CPU", err)
             }
         }
-        return tryLoad(env, modelFile, spec, nnapi = false)
+        return tryLoad(env, modelFile, spec, InferBackend.CPU)
     }
 
-    private fun tryLoad(env: OrtEnvironment, modelFile: File, spec: ModelSpec, nnapi: Boolean): LoadedModel {
+    private fun tryLoad(
+        env: OrtEnvironment,
+        modelFile: File,
+        spec: ModelSpec,
+        backend: InferBackend,
+    ): LoadedModel {
+        prepareAdspPath()
         val opts = OrtSession.SessionOptions()
         opts.setOptimizationLevel(
-            if (nnapi) OrtSession.SessionOptions.OptLevel.BASIC_OPT
-            else OrtSession.SessionOptions.OptLevel.ALL_OPT,
+            if (backend == InferBackend.CPU) OrtSession.SessionOptions.OptLevel.ALL_OPT
+            else OrtSession.SessionOptions.OptLevel.BASIC_OPT,
         )
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
         opts.setIntraOpNumThreads(threads)
-        var ep = "CPU"
-        if (nnapi) {
-            opts.addNnapi()
-            ep = "NNAPI"
+        val ep = when (backend) {
+            InferBackend.QNN -> {
+                configureQnn(opts, spec)
+                "QNN"
+            }
+            InferBackend.NNAPI -> {
+                opts.addNnapi()
+                "NNAPI"
+            }
+            InferBackend.CPU -> "CPU"
         }
         val session = env.createSession(modelFile.absolutePath, opts)
         val inputName = session.inputNames.firstOrNull() ?: "input"
         val (arch, cfg) = applyInputShape(session, spec)
+        Log.i(TAG, "Loaded ${spec.id} on $ep")
         return LoadedModel(session, env, ep, cfg, arch, inputName, spec.id)
+    }
+
+    private fun configureQnn(opts: OrtSession.SessionOptions, spec: ModelSpec) {
+        val backendPath = InferAccel.qnnBackendPath(nativeLibDir)
+            ?: error("libQnnHtp.so is missing")
+        val cacheDir = qnnCacheDir?.apply { mkdirs() }
+        if (cacheDir != null) {
+            opts.addConfigEntry("ep.context_enable", "1")
+            opts.addConfigEntry("ep.context_file_path", File(cacheDir, "${spec.id}.onnx").absolutePath)
+        }
+        opts.addQnn(
+            mapOf(
+                "backend_path" to backendPath,
+                "htp_performance_mode" to "burst",
+                "qnn_context_priority" to "high",
+                "enable_htp_fp16_precision" to "1",
+            ),
+        )
+    }
+
+    private fun prepareAdspPath() {
+        val dir = nativeLibDir ?: return
+        try {
+            Os.setenv("ADSP_LIBRARY_PATH", dir, true)
+        } catch (_: Exception) {
+        }
+    }
+
+    companion object {
+        private const val TAG = "DualisInfer"
     }
 
     fun applyInputShape(session: OrtSession, spec: ModelSpec): Pair<Architecture, ModelConfig> {
@@ -124,14 +181,29 @@ class StemSeparator {
         val vocalL = FloatArray(nSamples)
         val vocalR = FloatArray(nSamples)
         val totalChunks = ((nSamples + step - 1) / step).coerceAtLeast(1)
+        val restored = InferCkpt.load(destDir, model.modelId, nSamples)
+        var offset = restored?.offset ?: 0
+        var chunkIdx = restored?.chunkIdx ?: 0
+        if (restored != null) {
+            restored.left.copyInto(vocalL)
+            restored.right.copyInto(vocalR)
+        }
         val started = System.nanoTime()
-        onProgress(0.08f, "Running ONNX inference", null)
+        val pace = InferPace(warmupChunks = if (chunkIdx == 0) 1 else 0)
+        if (restored != null) {
+            onProgress(
+                0.08f + 0.82f * (chunkIdx.toFloat() / totalChunks),
+                inferChunkMessage(chunkIdx, totalChunks, model.epName, null),
+                null,
+            )
+        } else {
+            onProgress(0.08f, "Running ONNX inference", null)
+        }
 
-        var offset = 0
-        var chunkIdx = 0
         val left = FloatArray(chunk)
         val right = FloatArray(chunk)
         val input = FloatArray(4 * cfg.dimF * cfg.dimT)
+        val scratch = ByteBuffer.allocateDirect(input.size * 4).order(ByteOrder.nativeOrder())
         while (offset < nSamples) {
             left.fill(0f)
             right.fill(0f)
@@ -153,7 +225,7 @@ class StemSeparator {
                     input[idx(3, f, t)] = r.im
                 }
             }
-            val output = runTensor(model, input, longArrayOf(1, 4, cfg.dimF.toLong(), cfg.dimT.toLong()))
+            val output = runTensor(model, input, longArrayOf(1, 4, cfg.dimF.toLong(), cfg.dimT.toLong()), scratch)
             val shape = output.second
             val data = output.first
             val outL = Array(specL.size) { Array(engine.nBins()) { Complex32(0f, 0f) } }
@@ -184,12 +256,23 @@ class StemSeparator {
             chunkIdx += 1
             val pct = 0.08f + 0.82f * (chunkIdx.toFloat() / totalChunks)
             val elapsed = (System.nanoTime() - started) / 1_000_000_000f
-            val eta = (elapsed / chunkIdx) * (totalChunks - chunkIdx)
-            onProgress(pct, "Separating chunk $chunkIdx/$totalChunks · ETA ${eta.toInt()}s", eta)
+            val eta = pace.etaSeconds(chunkIdx, elapsed, totalChunks - chunkIdx)
+            onProgress(
+                pct,
+                inferChunkMessage(chunkIdx, totalChunks, model.epName, eta),
+                eta,
+            )
             offset += step
-            System.gc()
+            if (InferCkpt.shouldSave(chunkIdx)) {
+                InferCkpt.save(
+                    destDir,
+                    InferCheckpoint(model.modelId, nSamples, chunkIdx, offset, vocalL, vocalR),
+                )
+            }
+            InferGc.maybeCollect(chunkIdx)
         }
-        return writeStems(destDir, decoded, vocalL, vocalR, model.epName, onProgress)
+        InferCkpt.clear(destDir)
+        return writeStems(destDir, decoded, vocalL, vocalR, model, onProgress)
     }
 
     private fun runRoformer(
@@ -206,12 +289,27 @@ class StemSeparator {
         val vocalL = FloatArray(nSamples)
         val vocalR = FloatArray(nSamples)
         val totalChunks = ((nSamples + step - 1) / step).coerceAtLeast(1)
+        val restored = InferCkpt.load(destDir, model.modelId, nSamples)
+        var offset = restored?.offset ?: 0
+        var chunkIdx = restored?.chunkIdx ?: 0
+        if (restored != null) {
+            restored.left.copyInto(vocalL)
+            restored.right.copyInto(vocalR)
+        }
         val started = System.nanoTime()
-        onProgress(0.08f, "Running Roformer inference", null)
+        val pace = InferPace(warmupChunks = if (chunkIdx == 0) 1 else 0)
+        if (restored != null) {
+            onProgress(
+                0.08f + 0.82f * (chunkIdx.toFloat() / totalChunks),
+                inferChunkMessage(chunkIdx, totalChunks, model.epName, null, prefix = "Roformer chunk"),
+                null,
+            )
+        } else {
+            onProgress(0.08f, "Running Roformer inference", null)
+        }
         val left = FloatArray(chunk)
         val right = FloatArray(chunk)
-        var offset = 0
-        var chunkIdx = 0
+        val scratch = ByteBuffer.allocateDirect(chunk * 2 * 4).order(ByteOrder.nativeOrder())
         while (offset < nSamples) {
             left.fill(0f)
             right.fill(0f)
@@ -223,41 +321,83 @@ class StemSeparator {
                 WaveLayout.CHANNEL_FIRST -> longArrayOf(1, 2, chunk.toLong())
                 WaveLayout.CHANNEL_LAST -> longArrayOf(1, chunk.toLong(), 2)
             }
-            val (data, outShape) = runTensor(model, input, shape)
+            val (data, outShape) = runTensor(model, input, shape, scratch)
             val (recL, recR) = unpackWaveform(data, outShape, chunk, cfg.layout)
             StftEngine.overlapAdd(vocalL, recL, offset, fade)
             StftEngine.overlapAdd(vocalR, recR, offset, fade)
             chunkIdx += 1
             val pct = 0.08f + 0.82f * (chunkIdx.toFloat() / totalChunks)
             val elapsed = (System.nanoTime() - started) / 1_000_000_000f
-            val eta = (elapsed / chunkIdx) * (totalChunks - chunkIdx)
-            onProgress(pct, "Roformer chunk $chunkIdx/$totalChunks · ETA ${eta.toInt()}s", eta)
+            val eta = pace.etaSeconds(chunkIdx, elapsed, totalChunks - chunkIdx)
+            onProgress(
+                pct,
+                inferChunkMessage(chunkIdx, totalChunks, model.epName, eta, prefix = "Roformer chunk"),
+                eta,
+            )
             offset += step
-            System.gc()
+            if (InferCkpt.shouldSave(chunkIdx)) {
+                InferCkpt.save(
+                    destDir,
+                    InferCheckpoint(model.modelId, nSamples, chunkIdx, offset, vocalL, vocalR),
+                )
+            }
+            InferGc.maybeCollect(chunkIdx)
         }
-        return writeStems(destDir, decoded, vocalL, vocalR, model.epName, onProgress)
+        InferCkpt.clear(destDir)
+        return writeStems(destDir, decoded, vocalL, vocalR, model, onProgress)
     }
 
-    private fun runTensor(model: LoadedModel, input: FloatArray, shape: LongArray): Pair<FloatArray, LongArray> {
-        val buffer = FloatBuffer.wrap(input)
-        OnnxTensor.createTensor(model.env, buffer, shape).use { tensor ->
+    private fun inferChunkMessage(
+        chunkIdx: Int,
+        totalChunks: Int,
+        epName: String,
+        eta: Float?,
+        prefix: String = "Separating chunk",
+    ): String {
+        val etaPart = eta?.takeIf { it.isFinite() }?.let { " · ETA ${it.toInt()}s" }.orEmpty()
+        return "$prefix $chunkIdx/$totalChunks · $epName$etaPart"
+    }
+
+    private fun runTensor(
+        model: LoadedModel,
+        input: FloatArray,
+        shape: LongArray,
+        scratch: ByteBuffer,
+    ): Pair<FloatArray, LongArray> {
+        val bytes = input.size * 4
+        val buffer = if (scratch.capacity() >= bytes) {
+            scratch
+        } else {
+            ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder())
+        }
+        buffer.clear()
+        buffer.limit(bytes)
+        val direct = buffer.asFloatBuffer()
+        direct.put(input)
+        direct.rewind()
+        OnnxTensor.createTensor(model.env, direct, shape).use { tensor ->
             model.session.run(mapOf(model.inputName to tensor)).use { result ->
                 val value = result[0]
                 val info = value.info as TensorInfo
-                val data = (value.value as Array<*>).let { nested -> flattenFloats(nested) }
-                    ?: error("Unexpected ONNX output")
+                val data = extractFloats(value.value)
+                    ?: error("Unexpected ONNX output ${value.value?.javaClass?.name}")
                 return data to info.shape
             }
         }
     }
 
-    private fun flattenFloats(value: Any?): FloatArray? {
+    private fun extractFloats(value: Any?): FloatArray? {
         when (value) {
             is FloatArray -> return value
+            is FloatBuffer -> {
+                val copy = FloatArray(value.remaining())
+                value.duplicate().get(copy)
+                return copy
+            }
             is Array<*> -> {
-                val parts = value.mapNotNull { flattenFloats(it) }
-                val total = parts.sumOf { it.size }
-                val out = FloatArray(total)
+                val parts = value.mapNotNull { extractFloats(it) }
+                if (parts.isEmpty()) return null
+                val out = FloatArray(parts.sumOf { it.size })
                 var i = 0
                 for (p in parts) {
                     p.copyInto(out, i)
@@ -315,21 +455,23 @@ class StemSeparator {
     private fun writeStems(
         destDir: File,
         decoded: DecodedAudio,
-        vocalL: FloatArray,
-        vocalR: FloatArray,
-        epName: String,
+        primaryL: FloatArray,
+        primaryR: FloatArray,
+        model: LoadedModel,
         onProgress: (Float, String, Float?) -> Unit,
     ): SeparationResult {
         onProgress(0.92f, "Reconstructing stems", 0f)
-        val n = decoded.left.size
-        val vocalsL = vocalL.copyOf(n)
-        val vocalsR = vocalR.copyOf(n)
-        val instL = FloatArray(n)
-        val instR = FloatArray(n)
-        for (i in 0 until n) {
-            instL[i] = decoded.left[i] - vocalsL[i]
-            instR[i] = decoded.right[i] - vocalsR[i]
-        }
+        val (vocals, instrumental) = StemAssign.vocalsFromPrimary(
+            decoded.left,
+            decoded.right,
+            primaryL,
+            primaryR,
+            model.config.primaryStem,
+        )
+        val vocalsL = vocals.first
+        val vocalsR = vocals.second
+        val instL = instrumental.first
+        val instR = instrumental.second
         WavIo.peakNormalize(vocalsL, vocalsR, 0.98f)
         WavIo.peakNormalize(instL, instR, 0.98f)
         val vocalsPath = File(destDir, "vocals.wav")
@@ -345,7 +487,7 @@ class StemSeparator {
             peaksPath = peaksPath.absolutePath,
             durationMs = decoded.durationMs(),
             sampleRate = WavIo.TARGET_RATE,
-            executionProvider = epName,
+            executionProvider = model.epName,
         )
     }
 }

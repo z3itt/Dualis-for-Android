@@ -26,6 +26,38 @@ class LibraryRulesTest {
         assertEquals(1, LibraryRules.filterTracks(tracks, "reo").size)
     }
 
+    @Test
+    fun waitingTracksFollowQueueOrderAndSkipLive() {
+        val live = track("live", 1).copy(id = "live", status = TrackStatus.SEPARATING)
+        val first = track("first", 2).copy(id = "first", status = TrackStatus.QUEUED)
+        val second = track("second", 3).copy(id = "second", status = TrackStatus.QUEUED)
+        val waiting = LibraryRules.waitingTracks(
+            listOf(live, second, first),
+            listOf("live", "second", "first"),
+        )
+        assertEquals(listOf("second", "first"), waiting.map { it.id })
+        assertEquals(3, LibraryRules.jobBadgeCount(1, waiting.size))
+    }
+
+    @Test
+    fun libraryHidesFailedTracksAndJobsKeepThem() {
+        val ready = track("ready", 1)
+        val failed = track("fail", 2).copy(status = TrackStatus.ERROR)
+        assertEquals(listOf("ready"), LibraryRules.standaloneTracks(listOf(ready, failed)).map { it.title })
+        val jobs = LibraryRules.failedJobTracks(
+            tracks = emptyList(),
+            failedTracks = mapOf(failed.id to failed),
+            hiddenIds = emptySet(),
+        )
+        assertEquals(listOf("fail"), jobs.map { it.title })
+    }
+
+    @Test
+    fun stemFileNameStripsPathChars() {
+        assertEquals("Peter Pan - vocals.wav", LibraryRules.stemFileName("Peter Pan", "vocals"))
+        assertEquals("a_b - instrumental.wav", LibraryRules.stemFileName("a/b", "instrumental"))
+    }
+
     private fun track(title: String, created: Long, artist: String = "Local") = Track(
         id = title,
         title = title,

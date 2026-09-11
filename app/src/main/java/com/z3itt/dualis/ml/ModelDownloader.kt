@@ -43,7 +43,9 @@ class ModelDownloader(private val client: OkHttpClient = defaultClient()) {
                         copied += n
                         if (total > 0) {
                             val pct = (copied.toFloat() / total).coerceIn(0f, 1f)
-                            onProgress(pct * 0.15f, "Downloading model ${copied / 1_000_000} / ${total / 1_000_000} MB")
+                            onProgress(pct * 0.15f, "Downloading model ${formatMb(copied)} / ${formatMb(total)} MB")
+                        } else {
+                            onProgress(0.05f, "Downloading model ${formatMb(copied)} MB")
                         }
                     }
                 }
@@ -57,5 +59,10 @@ class ModelDownloader(private val client: OkHttpClient = defaultClient()) {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(5, TimeUnit.MINUTES)
             .build()
+
+        private fun formatMb(bytes: Long): String {
+            val mb = bytes / 1_000_000.0
+            return if (mb < 10) "%.1f".format(mb) else "%.0f".format(mb)
+        }
     }
 }

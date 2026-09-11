@@ -4,12 +4,12 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.z3itt.dualis.ui.theme.DualisOrange
@@ -22,10 +22,11 @@ fun Waveform(
     modifier: Modifier = Modifier,
 ) {
     val data = bars.ifEmpty { List(64) { 0.12f } }
+    val idle = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .height(28.dp)
+            .height(20.dp)
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
                     onSeek((offset.x / size.width).coerceIn(0f, 1f))
@@ -40,7 +41,7 @@ fun Waveform(
             val y = (size.height - h) / 2
             val played = i.toFloat() / data.size <= progress
             drawRoundRect(
-                color = if (played) DualisOrange else Color.Gray.copy(alpha = 0.35f),
+                color = if (played) DualisOrange else idle,
                 topLeft = Offset(x, y),
                 size = Size(w, h),
                 cornerRadius = CornerRadius(2f, 2f),

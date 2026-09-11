@@ -64,6 +64,7 @@ data class JobEvent(
     val message: String,
     val status: String,
     val etaSeconds: Float? = null,
+    val failedTrack: Track? = null,
 )
 
 data class ModelInfo(
@@ -79,7 +80,7 @@ data class RuntimeInfo(
     val modelReady: Boolean = false,
     val selectedModel: String = "kim-vocal-2",
     val executionProvider: String = "CPU",
-    val compiledProviders: List<String> = listOf("NNAPI", "CPU"),
+    val compiledProviders: List<String> = listOf("QNN", "NNAPI", "CPU"),
     val models: List<ModelInfo> = emptyList(),
     val downloadFormat: String = "auto",
     val firstRunHint: Boolean = false,

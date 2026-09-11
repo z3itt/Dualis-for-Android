@@ -19,6 +19,18 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    val releaseStorePath = System.getenv("DUALIS_STORE_FILE")
+    if (!releaseStorePath.isNullOrBlank()) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseStorePath)
+                storePassword = System.getenv("DUALIS_STORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("DUALIS_KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("DUALIS_KEY_PASSWORD") ?: ""
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -31,6 +43,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (!releaseStorePath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -51,7 +66,9 @@ android {
             excludes += "META-INF/versions/9/previous-compilation-data.bin"
         }
         jniLibs {
-            useLegacyPackaging = false
+            useLegacyPackaging = true
+            pickFirsts += "**/libc++_shared.so"
+            pickFirsts += "**/libonnxruntime.so"
         }
     }
     testOptions {
@@ -72,7 +89,7 @@ dependencies {
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
-    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
@@ -106,7 +123,7 @@ dependencies {
 
     // F-Droid-friendly YouTube extractor (Java). F-Droid builds should vendor this
     // instead of resolving from JitPack. See README.
-    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.24.6")
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.5")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

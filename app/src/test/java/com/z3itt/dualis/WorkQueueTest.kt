@@ -42,6 +42,33 @@ class WorkQueueTest {
     }
 
     @Test
+    fun cancelDropsPendingAndBlocksInFlight() {
+        val queue = WorkQueue()
+        queue.enqueue(WorkItem("a", "q-a"), false)
+        queue.enqueue(WorkItem("b", "q-b"), false)
+        val running = queue.pop()!!
+        queue.cancel(running.trackId)
+        queue.cancel("b")
+        assertEquals(true, queue.isCancelled(running.trackId))
+        assertNull(queue.pop())
+        queue.enqueue(WorkItem("a", "q-a-retry"), false)
+        assertEquals(false, queue.isCancelled("a"))
+        assertEquals("a", queue.pop()?.trackId)
+    }
+
+    @Test
+    fun idleOnlyAfterFinish() {
+        val queue = WorkQueue()
+        assertEquals(true, queue.isIdle())
+        queue.enqueue(WorkItem("a", "q-a"), false)
+        assertEquals(false, queue.isIdle())
+        val item = queue.pop()!!
+        assertEquals(false, queue.isIdle())
+        queue.finish(item.trackId)
+        assertEquals(true, queue.isIdle())
+    }
+
+    @Test
     fun finishRemovesFromQueuedSet() {
         val queue = WorkQueue()
         queue.enqueue(WorkItem("a", "q-a"), false)
@@ -49,5 +76,17 @@ class WorkQueueTest {
         queue.finish(item.trackId)
         queue.enqueue(WorkItem("a", "q-a-2"), false)
         assertEquals("a", queue.pop()?.trackId)
+    }
+
+    @Test
+    fun pendingIdsDropsTheRunningJob() {
+        val queue = WorkQueue()
+        queue.enqueue(WorkItem("a", "q-a"), false)
+        queue.enqueue(WorkItem("b", "q-b"), false)
+        assertEquals(listOf("a", "b"), queue.pendingIds.value)
+        queue.pop()
+        assertEquals(listOf("b"), queue.pendingIds.value)
+        queue.finish("a")
+        assertEquals(listOf("b"), queue.pendingIds.value)
     }
 }

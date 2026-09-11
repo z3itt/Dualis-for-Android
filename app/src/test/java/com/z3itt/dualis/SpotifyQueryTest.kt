@@ -26,6 +26,14 @@ class SpotifyQueryTest {
     }
 
     @Test
+    fun youtubeSearchParsesEmDashTitle() {
+        assertEquals(
+            "ytsearch1:Introvert ReoNa",
+            SpotifyQuery.youtubeSearchQuery("Introvert \u2014 ReoNa", "Unknown artist"),
+        )
+    }
+
+    @Test
     fun retryUsesStoredYoutubeSearch() {
         assertEquals(
             "ytsearch1:Introvert ReoNa",
@@ -51,6 +59,37 @@ class SpotifyQueryTest {
                 null,
             ),
         )
+    }
+
+    @Test
+    fun extractTrackIdsKeepsFirstOccurrenceOrder() {
+        val html = """
+            spotify:track:4iV5W9uYEdYUVa79Axb7Rh
+            https://open.spotify.com/track/7ouMYWpwJ422jRcKU4soKr
+            "uri":"spotify:track:4iV5W9uYEdYUVa79Axb7Rh"
+            spotify:track:3n3Ppam7vgaVa1iaRUc9Lp
+        """.trimIndent()
+        assertEquals(
+            listOf(
+                "4iV5W9uYEdYUVa79Axb7Rh",
+                "3n3Ppam7vgaVa1iaRUc9Lp",
+                "7ouMYWpwJ422jRcKU4soKr",
+            ),
+            SpotifyQuery.extractTrackIds(html),
+        )
+    }
+
+    @Test
+    fun embedUrlUsesPlaylistAndAlbumPaths() {
+        assertEquals(
+            "https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M",
+            SpotifyQuery.embedUrl("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"),
+        )
+        assertEquals(
+            "https://open.spotify.com/embed/album/5NTmsVSXhyEceR35rKz4S4",
+            SpotifyQuery.embedUrl("https://open.spotify.com/intl-tr/album/5NTmsVSXhyEceR35rKz4S4"),
+        )
+        assertEquals(null, SpotifyQuery.embedUrl("https://open.spotify.com/track/abc"))
     }
 
     @Test

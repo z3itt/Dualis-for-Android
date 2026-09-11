@@ -17,5 +17,13 @@
     <string name="playback_notification_title">Dualis</string>
     <string name="channel_jobs">Separation jobs</string>
     <string name="channel_playback">Playback</string>
+    <string name="shuffle_on">Shuffle on</string>
+    <string name="shuffle_off">Shuffle off</string>
+    <string name="repeat_off">Repeat off</string>
+    <string name="repeat_queue">Repeat queue</string>
+    <string name="repeat_song">Repeat song</string>
+    <string name="stem_normal">Normal mix</string>
+    <string name="stem_vocal">Vocals</string>
+    <string name="stem_inst">Instrumental</string>
     <string name="first_run_model">The first stem job downloads Kim Vocal 2 (about 60–80 MB) onto this device.</string>
 </resources>

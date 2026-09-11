@@ -19,7 +19,7 @@ object SpotifyQuery {
         if (lyrics.size == 2) {
             return lyrics[0].trim() to lyrics[1].trim()
         }
-        for (sep in listOf(" · ", " – ", " - ")) {
+        for (sep in listOf(" · ", " – ", " \u2014 ", " - ")) {
             val parts = cleaned.split(sep, limit = 2)
             if (parts.size == 2) {
                 val title = parts[0].trim()
@@ -71,4 +71,33 @@ object SpotifyQuery {
         val resolvedArtist = if (isPlaceholderArtist(artist)) fromTitle ?: artist else artist
         return Triple(cleanTitle, resolvedArtist, youtubeSearchQuery(cleanTitle, resolvedArtist))
     }
+
+    /** Same patterns as desktop `extract_spotify_track_ids`. */
+    fun extractTrackIds(html: String): List<String> {
+        val ids = mutableListOf<String>()
+        val seen = mutableSetOf<String>()
+        for (re in TRACK_ID_PATTERNS) {
+            for (match in re.findAll(html)) {
+                val id = match.groupValues[1]
+                if (seen.add(id)) ids.add(id)
+            }
+        }
+        return ids
+    }
+
+    fun embedUrl(url: String): String? {
+        url.split("/playlist/").getOrNull(1)?.let { rest ->
+            return "https://open.spotify.com/embed/playlist/${rest.trimEnd('/')}"
+        }
+        url.split("/album/").getOrNull(1)?.let { rest ->
+            return "https://open.spotify.com/embed/album/${rest.trimEnd('/')}"
+        }
+        return null
+    }
+
+    private val TRACK_ID_PATTERNS = listOf(
+        Regex("spotify:track:([A-Za-z0-9]{22})"),
+        Regex("open\\.spotify\\.com/track/([A-Za-z0-9]{22})"),
+        Regex("\"uri\"\\s*:\\s*\"spotify:track:([A-Za-z0-9]{22})\""),
+    )
 }

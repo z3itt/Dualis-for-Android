@@ -8,4 +8,13 @@
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:isLightTheme">false</item>
     </style>
+
+    <style name="Theme.Dualis.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/dualis_splash</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_mark</item>
+        <item name="postSplashScreenTheme">@style/Theme.Dualis</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/dualis_splash</item>
+        <item name="android:navigationBarColor">@color/dualis_splash</item>
+    </style>
 </resources>

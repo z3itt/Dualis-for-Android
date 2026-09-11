@@ -13,6 +13,7 @@ data class ModelConfig(
     val overlap: Float = 0.25f,
     val waveformLen: Int = 0,
     val layout: WaveLayout = WaveLayout.CHANNEL_FIRST,
+    val primaryStem: PrimaryStem = PrimaryStem.VOCALS,
 ) {
     fun chunkSize(): Int = hop * (dimT - 1).coerceAtLeast(0)
 }
@@ -48,7 +49,27 @@ object ModelCatalog {
                 compensate = 1.035f,
                 overlap = 0.25f,
             ),
-            description = "MDX-Net vocal model. Fast, reliable default for pop and electronic.",
+            description = "Default MDX vocal model for pop and electronic.",
+        ),
+        ModelSpec(
+            id = "uvr-mdx-kara-2",
+            name = "Karaoke 2 (faster)",
+            filename = "UVR_MDXNET_KARA_2.onnx",
+            urls = listOf(
+                "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR_MDXNET_KARA_2.onnx",
+                "https://huggingface.co/seanghay/uvr_models/resolve/main/UVR_MDXNET_KARA_2.onnx",
+            ),
+            architecture = Architecture.MDX,
+            config = ModelConfig(
+                nFft = 5120,
+                hop = 1024,
+                dimF = 2048,
+                dimT = 256,
+                compensate = 1.035f,
+                overlap = 0.25f,
+                primaryStem = PrimaryStem.INSTRUMENTAL,
+            ),
+            description = "Optional faster MDX. Trained as karaoke: primary stem is instrumental.",
         ),
         ModelSpec(
             id = "uvr-mdx-voc-ft",

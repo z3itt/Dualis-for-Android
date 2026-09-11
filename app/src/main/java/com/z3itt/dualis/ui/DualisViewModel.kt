@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.z3itt.dualis.DualisApplication
+import com.z3itt.dualis.audio.StemExport
 import com.z3itt.dualis.data.repo.LibraryRepository
 import com.z3itt.dualis.domain.ingest.LinkParser
 import com.z3itt.dualis.domain.ingest.SpotifyQuery
@@ -61,22 +62,38 @@ data class UiState(
     val shuffle: Boolean = false,
     val loopMode: LoopMode = LoopMode.OFF,
     val playQueue: List<String> = emptyList(),
+    val pendingJobIds: List<String> = emptyList(),
+    val failedTracks: Map<String, Track> = emptyMap(),
     val runtime: RuntimeInfo = RuntimeInfo(),
     val toast: String? = null,
+    val mainTab: MainTab = MainTab.LIBRARY,
 )
+
+enum class MainTab { LIBRARY, JOBS }
 
 class DualisViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as DualisApplication
     private val repo get() = app.container.repo
     private val queue get() = app.container.workQueue
     private val player get() = app.container.player
+    private val playback get() = app.container.playback
 
     private val jobs = MutableStateFlow<Map<String, JobEvent>>(emptyMap())
-    private val ui = MutableStateFlow(UiState())
+    private val ui = MutableStateFlow(UiState(themeDark = app.isThemeDark()))
 
-    val state: StateFlow<UiState> = combine(repo.observeSnapshot(), jobs, ui) { snap, jobMap, extra ->
-        extra.copy(tracks = snap.tracks, playlists = snap.playlists, jobs = jobMap)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
+    val state: StateFlow<UiState> = combine(
+        repo.observeSnapshot(),
+        jobs,
+        ui,
+        queue.pendingIds,
+    ) { snap, jobMap, extra, pending ->
+        extra.copy(
+            tracks = snap.tracks,
+            playlists = snap.playlists,
+            jobs = jobMap,
+            pendingJobIds = pending,
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, UiState())
 
     private var shuffleOrder = emptyList<String>()
     private var shufflePlayed = emptyList<String>()
@@ -87,14 +104,27 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
     init {
         viewModelScope.launch {
             val theme = repo.getSetting(LibraryRepository.SETTING_THEME, "light")
-            ui.update { it.copy(themeDark = theme == "dark") }
+            val dark = theme == "dark"
+            ui.update { it.copy(themeDark = dark) }
+            app.persistThemeDark(dark)
             refreshRuntime()
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            backfillMissingCovers()
         }
         viewModelScope.launch {
             JobForegroundService.bus().collect { event ->
                 jobs.update { it + (event.trackId to event) }
                 if (event.status == "error") {
-                    ui.update { it.copy(toast = event.message) }
+                    val failed = event.failedTrack
+                        ?: state.value.tracks.find { it.id == event.trackId }
+                            ?.copy(status = TrackStatus.ERROR, error = event.message)
+                    ui.update { extra ->
+                        extra.copy(
+                            toast = event.message,
+                            failedTracks = if (failed != null) extra.failedTracks + (failed.id to failed) else extra.failedTracks,
+                        )
+                    }
                 }
             }
         }
@@ -113,22 +143,79 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
-        player.onEnded = { viewModelScope.launch { skip(1, fromEnded = true) } }
-        JobForegroundService.start(application)
-        application.startService(Intent(application, PlaybackService::class.java))
+        playback.onSkip = { delta, fromEnded -> skip(delta, fromEnded) }
+        playback.onShuffleChanged = { on ->
+            shuffleOrder = emptyList()
+            shufflePlayed = emptyList()
+            ui.update { it.copy(shuffle = on) }
+        }
+        playback.onLoopChanged = { mode ->
+            player.setLoopMode(mode)
+            ui.update { it.copy(loopMode = mode) }
+        }
+        playback.onStemChanged = { mode ->
+            player.setStemMode(mode)
+            ui.update { it.copy(stemMode = mode) }
+        }
+        player.onEnded = { skip(1, fromEnded = true) }
+        restorePlaybackUi()
+    }
+
+    private fun rememberTrack(id: String?): String? {
+        playback.rememberTrack(id)
+        return id
+    }
+
+    private fun rememberQueue(ids: List<String>): List<String> {
+        playback.rememberQueue(ids)
+        return ids
+    }
+
+    private fun restorePlaybackUi() {
+        player.setStemMode(playback.stemMode)
+        player.setLoopMode(playback.loopMode)
+        val mediaId = playback.currentTrackId ?: player.currentMediaId()
+        if (playback.currentTrackId == null && mediaId != null) {
+            playback.rememberTrack(mediaId)
+        }
+        val live = player.hasMedia() && mediaId != null
+        val durationMs = player.durationMs.takeIf { it > 0 } ?: playback.durationMs
+        ui.update {
+            it.copy(
+                currentId = mediaId,
+                playing = live && player.playing.value,
+                currentTime = if (live) player.currentPosition() / 1000f else 0f,
+                duration = if (durationMs > 0) durationMs / 1000f else 0f,
+                volume = player.volume,
+                stemMode = playback.stemMode,
+                shuffle = playback.shuffle,
+                loopMode = playback.loopMode,
+                playQueue = playback.playQueue,
+            )
+        }
     }
 
     fun setIngestText(value: String) = ui.update { it.copy(ingestText = value, ingestError = null) }
     fun setQuery(value: String) = ui.update { it.copy(query = value) }
+    fun setMainTab(tab: MainTab) = ui.update { it.copy(mainTab = tab) }
     fun setSort(sort: LibrarySort) = ui.update { it.copy(sort = sort) }
-    fun openSettings(open: Boolean) = ui.update { it.copy(settingsOpen = open) }
+    fun openSettings(open: Boolean) = ui.update {
+        it.copy(settingsOpen = open, aboutOpen = if (open) false else it.aboutOpen)
+    }
     fun openAbout(open: Boolean) = ui.update { it.copy(aboutOpen = open, settingsOpen = if (open) false else it.settingsOpen) }
     fun setQueueOpen(open: Boolean) = ui.update { it.copy(queueOpen = open) }
     fun dismissToast() = ui.update { it.copy(toast = null) }
-    fun dismissError(id: String) = ui.update { it.copy(hiddenErrors = it.hiddenErrors + id) }
+    fun dismissError(id: String) {
+        ui.update { it.copy(hiddenErrors = it.hiddenErrors + id, failedTracks = it.failedTracks - id) }
+        viewModelScope.launch {
+            queue.cancel(id)
+            repo.deleteTrack(id)
+        }
+    }
 
     fun setThemeDark(dark: Boolean) {
         ui.update { it.copy(themeDark = dark) }
+        app.persistThemeDark(dark)
         viewModelScope.launch { repo.setSetting(LibraryRepository.SETTING_THEME, if (dark) "dark" else "light") }
     }
 
@@ -158,7 +245,7 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
                 for (input in inputs) {
                     ingestOneLink(input)
                 }
-                ui.update { it.copy(ingestText = "", ingestBusy = false) }
+                ui.update { it.copy(ingestText = "", ingestBusy = false, mainTab = MainTab.JOBS) }
             } catch (err: Exception) {
                 ui.update { it.copy(ingestBusy = false, ingestError = err.message) }
             }
@@ -175,7 +262,7 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
             ui.update { it.copy(ingestBusy = true, ingestError = null) }
             try {
                 for (uri in uris) ingestLocal(uri)
-                ui.update { it.copy(ingestBusy = false) }
+                ui.update { it.copy(ingestBusy = false, mainTab = MainTab.JOBS) }
             } catch (err: Exception) {
                 ui.update { it.copy(ingestBusy = false, ingestError = err.message) }
             }
@@ -193,7 +280,7 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
             )
             repo.upsert(track.copy(status = TrackStatus.QUEUED, error = null, updatedAt = now()))
             queue.enqueue(WorkItem(track.id, query), front = true)
-            ui.update { it.copy(hiddenErrors = it.hiddenErrors - track.id) }
+            ui.update { it.copy(hiddenErrors = it.hiddenErrors - track.id, failedTracks = it.failedTracks - track.id) }
             JobForegroundService.start(getApplication())
         }
     }
@@ -202,13 +289,15 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteTrack(id: String) {
         viewModelScope.launch {
-            if (ui.value.currentId == id) player.stop()
+            if (ui.value.currentId == id) player.clear()
+            queue.cancel(id)
             repo.deleteTrack(id)
             ui.update {
                 it.copy(
                     selectedIds = it.selectedIds - id,
-                    playQueue = it.playQueue - id,
-                    currentId = if (it.currentId == id) null else it.currentId,
+                    playQueue = rememberQueue(it.playQueue - id),
+                    failedTracks = it.failedTracks - id,
+                    currentId = rememberTrack(if (it.currentId == id) null else it.currentId),
                 )
             }
         }
@@ -216,8 +305,18 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteSelected() {
         val ids = ui.value.selectedIds.toList()
-        viewModelScope.launch { repo.deleteTracks(ids) }
-        ui.update { it.copy(selectedIds = emptySet()) }
+        viewModelScope.launch {
+            if (ui.value.currentId in ids) player.clear()
+            ids.forEach { queue.cancel(it) }
+            repo.deleteTracks(ids)
+        }
+        ui.update {
+            it.copy(
+                selectedIds = emptySet(),
+                playQueue = rememberQueue(it.playQueue - ids.toSet()),
+                currentId = rememberTrack(if (it.currentId in ids) null else it.currentId),
+            )
+        }
     }
 
     fun toggleSelected(id: String) {
@@ -231,13 +330,16 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
     fun openPlaylist(id: String?) = ui.update { it.copy(openPlaylistId = id, selectedIds = emptySet()) }
 
     fun deletePlaylist(id: String) {
-        viewModelScope.launch { repo.deletePlaylist(id) }
+        viewModelScope.launch {
+            state.value.tracks.filter { it.playlistId == id }.forEach { queue.cancel(it.id) }
+            repo.deletePlaylist(id)
+        }
         ui.update { it.copy(openPlaylistId = if (it.openPlaylistId == id) null else it.openPlaylistId) }
     }
 
-    fun addToQueue(id: String) = ui.update { it.copy(playQueue = (it.playQueue + id).distinct()) }
-    fun removeFromQueue(id: String) = ui.update { it.copy(playQueue = it.playQueue - id) }
-    fun clearQueue() = ui.update { it.copy(playQueue = emptyList()) }
+    fun addToQueue(id: String) = ui.update { it.copy(playQueue = rememberQueue((it.playQueue + id).distinct())) }
+    fun removeFromQueue(id: String) = ui.update { it.copy(playQueue = rememberQueue(it.playQueue - id)) }
+    fun clearQueue() = ui.update { it.copy(playQueue = rememberQueue(emptyList())) }
 
     fun playTrack(track: Track) {
         if (track.status != TrackStatus.READY || track.vocalsPath == null || track.instrumentalPath == null) {
@@ -245,12 +347,35 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
             ui.update { it.copy(toast = "${track.title} is next in the queue. Playback starts when stems are ready.") }
             return
         }
-        player.load(File(track.vocalsPath), File(track.instrumentalPath))
-        player.setStemMode(ui.value.stemMode)
+        val vocalsFile = File(track.vocalsPath)
+        val instFile = File(track.instrumentalPath)
+        if (!vocalsFile.isFile || !instFile.isFile) {
+            ui.update { it.copy(toast = "Stem files are missing. Separate this track again.") }
+            return
+        }
+        player.load(
+            vocalsFile,
+            instFile,
+            track.title,
+            track.artist,
+            track.coverPath,
+            track.id,
+            track.durationMs,
+        )
+        playback.setDuration(track.durationMs)
+        player.setStemMode(playback.stemMode)
         player.setVolume(ui.value.volume)
-        player.setLoopMode(ui.value.loopMode)
+        player.setLoopMode(playback.loopMode)
         player.play()
-        ui.update { it.copy(currentId = track.id, playing = true, duration = (track.durationMs ?: 0) / 1000f) }
+        ensurePlaybackService()
+        playback.notifyTrackChanged()
+        ui.update {
+            it.copy(
+                currentId = rememberTrack(track.id),
+                playing = true,
+                duration = (track.durationMs ?: 0) / 1000f,
+            )
+        }
         playHistory = (listOf(track.id) + playHistory).distinct().take(50)
     }
 
@@ -262,6 +387,11 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         player.toggle()
+        if (player.playing.value) ensurePlaybackService()
+    }
+
+    private fun ensurePlaybackService() {
+        PlaybackService.start(getApplication())
     }
 
     fun seek(seconds: Float) = player.seek((seconds * 1000).toLong())
@@ -271,26 +401,11 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
         ui.update { it.copy(volume = volume) }
     }
 
-    fun setStemMode(mode: StemMode) {
-        player.setStemMode(mode)
-        ui.update { it.copy(stemMode = mode) }
-    }
+    fun setStemMode(mode: StemMode) = playback.setStemMode(mode)
 
-    fun setShuffle(on: Boolean) {
-        shuffleOrder = emptyList()
-        shufflePlayed = emptyList()
-        ui.update { it.copy(shuffle = on) }
-    }
+    fun setShuffle(on: Boolean) = playback.setShuffle(on)
 
-    fun cycleLoopMode() {
-        val next = when (ui.value.loopMode) {
-            LoopMode.OFF -> LoopMode.QUEUE
-            LoopMode.QUEUE -> LoopMode.SONG
-            LoopMode.SONG -> LoopMode.OFF
-        }
-        player.setLoopMode(next)
-        ui.update { it.copy(loopMode = next) }
-    }
+    fun cycleLoopMode() = playback.cycleLoop()
 
     fun skip(delta: Int, fromEnded: Boolean = false) {
         val snap = state.value
@@ -308,8 +423,8 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
             lockedContext = lockedContext,
         )
         lockedContext = context
-        val wrap = snap.loopMode == LoopMode.QUEUE || !fromEnded
-        val ordered = if (snap.shuffle) {
+        val wrap = playback.loopMode == LoopMode.QUEUE || !fromEnded
+        val ordered = if (playback.shuffle) {
             if (shuffleContext != context) {
                 shuffleOrder = PlaybackRules.rotateTo(PlaybackRules.shuffledIds(ids), snap.currentId)
                 shufflePlayed = snap.currentId?.let { listOf(it) }.orEmpty()
@@ -324,14 +439,64 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
         playTrack(next)
     }
 
-    fun exportStems(track: Track, destDir: Uri) {
+    fun saveStem(track: Track, stem: StemMode) {
+        val path = when (stem) {
+            StemMode.VOCALS -> track.vocalsPath
+            StemMode.INSTRUMENTAL -> track.instrumentalPath
+            StemMode.ORIGINAL -> null
+        }
+        if (track.status != TrackStatus.READY || path.isNullOrBlank()) {
+            ui.update { it.copy(toast = "Stems are not ready yet.") }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
-            val resolver = getApplication<Application>().contentResolver
-            val vocals = track.vocalsPath ?: return@launch
-            val inst = track.instrumentalPath ?: return@launch
-            copyToTree(resolver, destDir, File(vocals), "${track.title} - vocals.wav")
-            copyToTree(resolver, destDir, File(inst), "${track.title} - instrumental.wav")
-            ui.update { it.copy(toast = "Exported stems for ${track.title}") }
+            val label = if (stem == StemMode.VOCALS) "vocals" else "instrumental"
+            val name = LibraryRules.stemFileName(track.title, label)
+            val ok = StemExport.saveWav(getApplication(), File(path), name, track.artist)
+            ui.update {
+                it.copy(
+                    toast = if (ok) {
+                        "Saved $label to Music/Dualis"
+                    } else {
+                        "Could not save $label. Try Export from the selection bar."
+                    },
+                )
+            }
+        }
+    }
+
+    fun exportSelected(destDir: Uri) {
+        val selected = state.value.selectedIds
+        val tracks = state.value.tracks.filter {
+            it.status == TrackStatus.READY &&
+                it.vocalsPath != null &&
+                it.instrumentalPath != null &&
+                (it.id in selected || (selected.isEmpty() && it.id == state.value.currentId))
+        }
+        exportSelected(destDir, tracks)
+    }
+
+    private fun exportSelected(destDir: Uri, tracks: List<Track>) {
+        if (tracks.isEmpty()) {
+            ui.update { it.copy(toast = "Select a ready track to export.") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            try {
+                app.contentResolver.takePersistableUriPermission(
+                    destDir,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            } catch (_: SecurityException) {
+            }
+            tracks.forEach { track ->
+                val vocals = track.vocalsPath ?: return@forEach
+                val inst = track.instrumentalPath ?: return@forEach
+                copyToTree(app.contentResolver, destDir, File(vocals), "${track.title} - vocals.wav")
+                copyToTree(app.contentResolver, destDir, File(inst), "${track.title} - instrumental.wav")
+            }
+            ui.update { it.copy(toast = "Exported stems for ${tracks.size} track${if (tracks.size == 1) "" else "s"}") }
         }
     }
 
@@ -350,9 +515,18 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
         val id = UUID.randomUUID().toString()
         val destDir = repo.trackDir(id)
         val name = uri.lastPathSegment?.substringAfterLast('/') ?: "audio"
-        val ext = name.substringAfterLast('.', "bin")
+        val ext = name.substringAfterLast('.', "bin").ifBlank { "bin" }
         val dest = File(destDir, "source.$ext")
-        withContext(Dispatchers.IO) { app.container.localFiles.copyFromUri(uri, dest) }
+        withContext(Dispatchers.IO) {
+            try {
+                getApplication<Application>().contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            } catch (_: SecurityException) {
+            }
+            app.container.localFiles.copyFromUri(uri, dest)
+        }
         val meta = app.container.localFiles.metadata(dest.absolutePath)
         val cover = File(destDir, "cover.jpg")
         com.z3itt.dualis.audio.AudioDecoder(getApplication()).extractCover(dest.absolutePath, cover)
@@ -363,7 +537,7 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
             sourceUrl = uri.toString(),
             sourceKind = "local",
             sourcePath = dest.absolutePath,
-            coverPath = cover.takeIf { it.exists() }?.absolutePath,
+            coverPath = cover.takeIf { it.isFile && it.length() > 64L }?.absolutePath,
             status = TrackStatus.DOWNLOADED,
             createdAt = now(),
             updatedAt = now(),
@@ -377,6 +551,13 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
         val batch = app.container.linkBackend.resolve(input)
         val playlistId = batch.playlist?.let { meta ->
             val id = UUID.randomUUID().toString()
+            val coverFile = File(repo.trackDir("playlist-$id"), "cover.jpg")
+            val coverOk = withContext(Dispatchers.IO) {
+                app.container.linkBackend.saveCover(
+                    coverFile,
+                    app.container.linkBackend.coverUrls(meta.sourceUrl, null, meta.coverUrl),
+                )
+            }
             repo.upsertPlaylist(
                 Playlist(
                     id = id,
@@ -384,6 +565,7 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
                     artist = meta.artist,
                     sourceUrl = meta.sourceUrl,
                     sourceKind = meta.sourceKind,
+                    coverPath = coverFile.takeIf { coverOk }?.absolutePath,
                     createdAt = now(),
                     updatedAt = now(),
                 ),
@@ -392,12 +574,20 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
         }
         batch.items.forEachIndexed { index, item ->
             val id = UUID.randomUUID().toString()
+            val coverFile = File(repo.trackDir(id), "cover.jpg")
+            val coverOk = withContext(Dispatchers.IO) {
+                app.container.linkBackend.saveCover(
+                    coverFile,
+                    app.container.linkBackend.coverUrls(item.sourceUrl, item.ytdlpQuery, item.coverUrl),
+                )
+            }
             val track = Track(
                 id = id,
                 title = item.title,
                 artist = item.artist,
                 sourceUrl = item.sourceUrl,
                 sourceKind = item.sourceKind,
+                coverPath = coverFile.takeIf { coverOk }?.absolutePath,
                 status = TrackStatus.QUEUED,
                 createdAt = now(),
                 updatedAt = now(),
@@ -436,6 +626,42 @@ class DualisViewModel(application: Application) : AndroidViewModel(application) 
                     firstRunHint = models.none { it.ready },
                 ),
             )
+        }
+    }
+
+    private suspend fun backfillMissingCovers() {
+        val snap = repo.snapshot()
+        snap.tracks.forEach { track ->
+            val dest = File(repo.trackDir(track.id), "cover.jpg")
+            if (dest.isFile && dest.length() > 64L) {
+                if (track.coverPath.isNullOrBlank()) {
+                    repo.upsert(track.copy(coverPath = dest.absolutePath, updatedAt = now()))
+                }
+                return@forEach
+            }
+            val saved = app.container.linkBackend.saveCover(
+                dest,
+                app.container.linkBackend.coverUrls(track.sourceUrl, track.ytdlpQuery),
+            )
+            if (saved) {
+                repo.upsert(track.copy(coverPath = dest.absolutePath, updatedAt = now()))
+            }
+        }
+        snap.playlists.forEach { playlist ->
+            val dest = File(repo.trackDir("playlist-${playlist.id}"), "cover.jpg")
+            if (dest.isFile && dest.length() > 64L) {
+                if (playlist.coverPath.isNullOrBlank()) {
+                    repo.upsertPlaylist(playlist.copy(coverPath = dest.absolutePath, updatedAt = now()))
+                }
+                return@forEach
+            }
+            val saved = app.container.linkBackend.saveCover(
+                dest,
+                app.container.linkBackend.coverUrls(playlist.sourceUrl, null),
+            )
+            if (saved) {
+                repo.upsertPlaylist(playlist.copy(coverPath = dest.absolutePath, updatedAt = now()))
+            }
         }
     }
 
