@@ -45,15 +45,15 @@ Separation runs on the device. Audio is not uploaded to a Dualis server.
 
 | Library (light) | Library (dark) |
 |-----------------|----------------|
-| ![Library in light mode](docs/screenshots/library-light.jpg) | ![Library in dark mode](docs/screenshots/library-dark.jpg) |
+| ![Library in light mode](docs/screenshots/library-light.png) | ![Library in dark mode](docs/screenshots/library-dark.png) |
 
 | Job queue (light) | Job queue (dark) |
 |-------------------|------------------|
-| ![Jobs in light mode](docs/screenshots/jobs-light.jpg) | ![Jobs in dark mode](docs/screenshots/jobs-dark.jpg) |
+| ![Jobs in light mode](docs/screenshots/jobs-light.png) | ![Jobs in dark mode](docs/screenshots/jobs-dark.png) |
 
 | Settings | System mini player |
 |----------|--------------------|
-| ![Settings](docs/screenshots/settings.jpg) | ![Lock-screen media controls](docs/screenshots/mini-player.jpg) |
+| ![Settings](docs/screenshots/settings.png) | ![Lock-screen media controls](docs/screenshots/mini-player.png) |
 
 ## Architecture
 
