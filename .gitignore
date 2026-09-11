@@ -1,24 +1,37 @@
 *.iml
 .gradle/
-local.properties
 /.idea/
+.kotlin/
 .DS_Store
-/build/
-/app/build/
 /captures/
+.externalNativeBuild
+.cxx/
 *.apk
 *.aab
 *.ap_
 *.dex
 *.class
-.cxx/
 *.log
-.kotlin/
-keystore.properties
+*.hprof
+bin/
+gen/
+out/
+
+# Machine-specific SDK path. Keep gradle.properties and gradle/wrapper committed.
+local.properties
+
+# Module build dirs
+build/
+/app/build/
+/app/release/
+
+# Signing material. Never commit a release keystore or passwords.
 *.jks
 *.keystore
-.externalNativeBuild
-/app/release/
-# downloaded ONNX models if ever vendored locally
+keystore.properties
+secrets.properties
+dualis-release.*
+
+# Downloaded ONNX models if ever vendored locally
 *.onnx
 .vscode/

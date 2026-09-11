@@ -1,10 +1,10 @@
-Dualis
+Dualis for Android
 Copyright (C) 2026 z3itt <info@z3itt.com>
 
-This product is licensed under the GNU General Public License v3.0 or later.
-See LICENSE and COPYING for the full terms.
+This application is licensed under the GNU General Public License v3.0 or
+later. See LICENSE and COPYING for the full license text.
 
-Third-party components (ONNX Runtime Android, AndroidX / Media3, OkHttp,
-JTransforms, NewPipe Extractor, Jsoup, and others) remain under their own
-licenses. Bundled models are used only on the local machine and are not
-redistributed by Dualis unless you include them yourself.
+Third-party libraries, transitive dependencies, asset notes, downloaded
+models, and merged permission explanations are listed in ATTRIBUTION.md.
+
+Contact: info@z3itt.com

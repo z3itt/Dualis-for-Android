@@ -6,8 +6,8 @@ AuthorName: z3itt
 AuthorEmail: info@z3itt.com
 AuthorWebSite: https://z3itt.com
 WebSite: https://github.com/z3itt/Dualis
-SourceCode: https://github.com/z3itt/Dualis-Android
-IssueTracker: https://github.com/z3itt/Dualis-Android/issues
+SourceCode: https://github.com/z3itt/Dualis-for-Android
+IssueTracker: https://github.com/z3itt/Dualis-for-Android/issues
 
 Summary: On-device vocal and instrumental stem separation
 Description: |-
@@ -23,7 +23,7 @@ Description: |-
     First run downloads the selected ONNX model (about 60–80 MB).
 
 RepoType: git
-Repo: https://github.com/z3itt/Dualis-Android.git
+Repo: https://github.com/z3itt/Dualis-for-Android.git
 
 Builds:
   - versionName: 1.0.0
