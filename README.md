@@ -1,9 +1,11 @@
 # Dualis for Android
 
-On-device vocal and instrumental stem separation for phones and tablets.
-Paste a Spotify, YouTube Music, or YouTube link, or open a local audio file.
-Dualis downloads audio onto the device, splits vocals from the mix with ONNX,
-and plays both stems in sync.
+**Dualis for Android** is a local audio processing engine for phones and
+tablets. It separates vocals and instrumentals on the device with ONNX, then
+plays both stems in sync (Jetpack Compose, NNAPI or CPU).
+
+Provide a URL or share a local audio file: fetch, separation, and playback stay
+on the device. Nothing is uploaded to a Dualis server.
 
 This is a **native Android sibling** of [desktop Dualis](https://github.com/z3itt/Dualis).
 It is not a WebView or Tauri wrap of the desktop UI.
@@ -29,18 +31,30 @@ applicationId is used on purpose: desktop and Android are different package
 ecosystems (native installers vs APK), so F-Droid and sideload builds do not
 collide with the Tauri identifier.
 
-Separation runs on the device. Audio is not uploaded to a Dualis server.
-
 ## Highlights
 
-- Paste Spotify, YouTube Music, YouTube, or playlist links, or share a local file
-- Spotify tracks resolve to YouTube with **title + artist** search
-- One job at a time: download, decode, ONNX inference, then export
 - Local ONNX vocal isolation (Kim Vocal 2 by default; Karaoke 2 is faster)
 - Dual-stem player: original, vocals, or instrumental
 - Shuffle, queue loop, and song loop
 - System media notification and lock-screen mini player
 - NNAPI when it works, then CPU. Accelerator errors retry on CPU
+- **Link ingest:** Spotify, YouTube Music, YouTube, or playlist URLs you provide
+- Share `audio/*` files or open them from the library
+- Spotify metadata resolves to a public video search (**title + artist**)
+- One job at a time: ingest, decode, ONNX inference, then export
+
+## Responsible use
+
+Dualis is a personal tool for on-device audio processing. You are responsible
+for how you use it.
+
+- Use only content you have the right to process (your files, licensed material,
+  or other cases where you have permission).
+- Third-party platforms have their own terms; complying with them is your
+  responsibility.
+- Dualis does not host, stream, or redistribute music. It runs locally on your
+  device.
+- The project is not intended to encourage copyright infringement.
 
 ## Screenshots
 
@@ -111,7 +125,7 @@ and two ExoPlayer instances stay in sync.
 | UI | Compose + Material 3, Dualis tokens |
 | State | `StateFlow` / `SharedFlow` in `DualisViewModel` |
 | Jobs | `WorkQueue` + `JobForegroundService` |
-| Spotify | oEmbed + scrape, then a YouTube search |
+| Link metadata | oEmbed + scrape, then a public video search |
 | Retry | Stored `ytdlpQuery`, never the Spotify URL |
 | Separation | ONNX MDX / Roformer on device |
 | Execution | NNAPI when available, CPU fallback |
@@ -225,16 +239,16 @@ These numbers match desktop Dualis, on phone hardware:
 If QNN or NNAPI fail, Dualis retries on CPU and shows
 "GPU memory exhausted, retrying on CPU" or "Accelerator failed, retrying on CPU".
 
-## Download backends
+## Ingest backends
 
-`DownloadBackend` has two implementations:
+`DownloadBackend` has two implementations (local files vs remote URL ingest):
 
 - **`LocalFileBackend`** takes files from the SAF picker and from `audio/*`
   share intents.
-- **`LinkBackend`** pulls YouTube audio through
+- **`LinkBackend`** fetches audio from supported URLs through
   [NewPipe Extractor](https://github.com/TeamNewPipe/NewPipeExtractor), a FOSS
-  Java library. Spotify links resolve through oEmbed or a page scrape first,
-  then a YouTube search using the stored `ytsearch1:` query.
+  Java library. Spotify URLs go through oEmbed or a page scrape for metadata,
+  then a public video search using the stored `ytsearch1:` query.
 
 Android does not spawn a desktop `yt-dlp` sidecar. Bundling a Python/yt-dlp
 binary would fight SELinux, ABI splits, and F-Droid reproducible builds.
