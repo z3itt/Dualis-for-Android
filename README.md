@@ -16,7 +16,7 @@ It is not a WebView or Tauri wrap of the desktop UI.
 | **Version** | `1.0.0` |
 | **Min SDK** | 26 (Android 8.0) |
 | **Target SDK** | 35 |
-| **Distribution** | GitHub Releases |
+| **Distribution** | GitHub Releases, F-Droid |
 | **Desktop sibling** | Dualis for Linux and Windows |
 | **License** | [GPL-3.0-or-later](LICENSE) |
 
@@ -26,7 +26,7 @@ terms of the GNU General Public License v3. See [LICENSE](LICENSE),
 
 There is no Play Store build and no Google Play Services requirement. The same
 applicationId is used on purpose: desktop and Android are different package
-ecosystems (native installers vs APK), so sideload builds do not
+ecosystems (native installers vs APK), so F-Droid and sideload builds do not
 collide with the Tauri identifier.
 
 Separation runs on the device. Audio is not uploaded to a Dualis server.
