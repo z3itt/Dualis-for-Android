@@ -16,7 +16,7 @@ It is not a WebView or Tauri wrap of the desktop UI.
 | **Version** | `1.0.0` |
 | **Min SDK** | 26 (Android 8.0) |
 | **Target SDK** | 35 |
-| **Distribution** | GitHub Releases, F-Droid |
+| **Distribution** | GitHub Releases |
 | **Desktop sibling** | Dualis for Linux and Windows |
 | **License** | [GPL-3.0-or-later](LICENSE) |
 
